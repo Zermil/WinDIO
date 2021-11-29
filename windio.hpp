@@ -25,8 +25,8 @@ void windioPlay(double frequency, Wave wave);
 #ifdef WINDIO_IMPLEMENTATION
 
 static constexpr double PI = 2.0 * acos(0.0);
-static constexpr DWORD BLOCKS_SZ = 1000;
-static constexpr DWORD SAMPLES_SZ = 512;
+static constexpr DWORD BLOCKS_SZ = 8;
+static constexpr DWORD SAMPLES_SZ = 256;
 static constexpr DWORD SAMPLE_RATE = 44100;
 static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
 
