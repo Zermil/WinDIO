@@ -3,7 +3,7 @@
 #define WINDIO_IMPLEMENTATION
 #include "./windio.hpp"
 
-// For compiler that implement it
+// For compilers that implement it
 #pragma comment(lib, "winmm.lib")
 
 enum Key : uint8_t {
@@ -20,11 +20,11 @@ int main()
     
     while (running) {
 	if (GetAsyncKeyState(KEY_A) & 0x01) {
-	    windioPlay(440.0, Wave::SIN);
+	    windioPlay(440.0);
 	}
 
 	if (GetAsyncKeyState(KEY_S) & 0x01) {
-	    windioPlay(264.0, Wave::SIN);
+	    windioPlay(264.0);
 	}
 
 	if (GetAsyncKeyState(VK_ESCAPE) & 0x01) {
@@ -32,6 +32,6 @@ int main()
 	}
     }
 
-    windioUninitialize();
+    windioDestroy();
     return 0;
 }

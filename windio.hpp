@@ -18,9 +18,9 @@ enum class Wave {
 };
 
 void windioInitialize();
-void windioUninitialize();
+void windioDestroy();
 void windioGetDevsInfo();
-void windioPlay(double frequency, Wave wave);
+void windioPlay(double frequency, double volume, Wave wave);
 
 #endif // WINDIO_HPP
 
@@ -40,6 +40,12 @@ static HWAVEOUT DEVICE;
 static WAVEHDR* WAVE_HDR;
 static short* BLOCK;
 
+// Frequency as Angular velocity
+static inline double FAA(double f) noexcept
+{
+    return f * 2.0 * PI;
+}
+
 static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
     (void) hwo;
@@ -55,7 +61,7 @@ static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, 
 static void error(const char* err_msg)
 {
     fprintf(stderr, err_msg);
-    windioUninitialize();
+    windioDestroy();
     exit(1);
 }
 
@@ -73,7 +79,7 @@ void windioInitialize()
     wave.wFormatTag = WAVE_FORMAT_PCM;
     wave.nSamplesPerSec = SAMPLE_RATE;
     wave.nChannels = 1;
-    wave.wBitsPerSample = 8;
+    wave.wBitsPerSample = 16;
     wave.nBlockAlign = (wave.nChannels * (wave.wBitsPerSample / 8));
     wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
     wave.cbSize = 0;
@@ -106,7 +112,7 @@ void windioInitialize()
     }
 }
 
-void windioUninitialize()
+void windioDestroy()
 {
     if (BLOCK) {
 	delete[] BLOCK;
@@ -136,26 +142,32 @@ void windioGetDevsInfo()
     }
 }
 
-void windioPlay(double frequency, Wave wave)
+void windioPlay(double frequency, double volume = 0.3, Wave wave = Wave::SIN)
 {
     // TODO(Aiden): Appropriate function for selected wave.
     (void) wave;
 
+    if (volume > 1.0) {
+	volume = 1.0;
+    } else if (volume < 0.0) {
+	volume = 0.0;
+    }
+    
     if (FREE_BLOCKS == 0) return;
     FREE_BLOCKS--;
-
+    
     if (WAVE_HDR[CURRENT_BLOCK].dwFlags & WHDR_PREPARED) {
 	MMRESULT unprepare_result = waveOutUnprepareHeader(DEVICE, &WAVE_HDR[CURRENT_BLOCK], sizeof(WAVEHDR));
 	
 	if (unprepare_result != MMSYSERR_NOERROR) {
-	    error("ERROR: Could not unprepare wave header\n");
+	    error("ERROR: Could not clear wave header\n");
 	}
     }
 
     for (DWORD i = 0; i < SAMPLES_SZ; ++i) {
-	short sample_freq = sin(frequency * 2.0 * PI * GLOBAL_TIME) * SHRT_MAX;
-	    
-	BLOCK[(CURRENT_BLOCK * SAMPLES_SZ) + i] = sample_freq * 0.3;
+	short sample_freq = static_cast<short>((sin(FAA(frequency) * GLOBAL_TIME) * volume) * SHRT_MAX);
+	
+	BLOCK[(CURRENT_BLOCK * SAMPLES_SZ) + i] = sample_freq;
 	GLOBAL_TIME += TIME_STEP;
     }
     
