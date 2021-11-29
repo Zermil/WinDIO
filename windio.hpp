@@ -13,6 +13,8 @@
 
 enum class Wave {
     SIN = 0,
+    SAW,
+    TRI,
 };
 
 void windioInitialize();
@@ -71,7 +73,7 @@ void windioInitialize()
     wave.wFormatTag = WAVE_FORMAT_PCM;
     wave.nSamplesPerSec = SAMPLE_RATE;
     wave.nChannels = 1;
-    wave.wBitsPerSample = sizeof(short) * 8;
+    wave.wBitsPerSample = 8;
     wave.nBlockAlign = (wave.nChannels * (wave.wBitsPerSample / 8));
     wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
     wave.cbSize = 0;
@@ -113,7 +115,8 @@ void windioUninitialize()
     if (WAVE_HDR) {
 	delete[] WAVE_HDR;
     }
-    
+
+    // TODO(Aiden): Make sure nothing is playing before closing the device.
     waveOutClose(DEVICE);
 }
 
@@ -135,6 +138,7 @@ void windioGetDevsInfo()
 
 void windioPlay(double frequency, Wave wave)
 {
+    // TODO(Aiden): Appropriate function for selected wave.
     (void) wave;
 
     if (FREE_BLOCKS == 0) return;

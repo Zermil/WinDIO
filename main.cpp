@@ -1,8 +1,15 @@
+#include <cstdint>
+
 #define WINDIO_IMPLEMENTATION
 #include "./windio.hpp"
 
 // For compiler that implement it
 #pragma comment(lib, "winmm.lib")
+
+enum Key : uint8_t {
+    KEY_A = 0x41,
+    KEY_S = 0x53,
+};
 
 int main()
 {
@@ -12,11 +19,11 @@ int main()
     bool running = true;
     
     while (running) {
-	if (GetAsyncKeyState(0x41) & 0x01) {
+	if (GetAsyncKeyState(KEY_A) & 0x01) {
 	    windioPlay(440.0, Wave::SIN);
 	}
 
-	if (GetAsyncKeyState(0x53) & 0x01) {
+	if (GetAsyncKeyState(KEY_S) & 0x01) {
 	    windioPlay(264.0, Wave::SIN);
 	}
 
