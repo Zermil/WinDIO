@@ -99,7 +99,7 @@ void windioInitialize()
     wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
     wave.cbSize = 0;
     
-    MMRESULT open_result = waveOutOpen(&device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
+    MMRESULT open_result = waveOutOpen(&device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION | WAVE_ALLOWSYNC);
 
     if (open_result != MMSYSERR_NOERROR) {
 	error("ERROR: Default audio output device could not be properly opened!\n");
@@ -223,7 +223,7 @@ static void windioPlayThread()
 	    short sample_freq = static_cast<short>(get_sample_from_settings() * SHRT_MAX);
 
 	    block[(current_block * SAMPLES_SZ) + i] = sample_freq;
-	    global_time += TIME_STEP;
+	    global_time = (global_time + TIME_STEP);
 	}
     
 	MMRESULT prepare_result = waveOutPrepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
