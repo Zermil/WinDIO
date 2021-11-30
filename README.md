@@ -11,7 +11,7 @@ Created as an incentive to learn more about Windows API and, at the very least, 
 
 ### Compile/Build (Test):
 
-Remember to link against 'winmm'
+Remember to link against 'winmm' and 'pthreads'
 
 ```console
 > build
