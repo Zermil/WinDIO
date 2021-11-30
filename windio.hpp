@@ -3,8 +3,12 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cassert>
 #include <cmath>
 #include <climits>
+#include <thread>
+#include <atomic>
+#include <condition_variable>
 
 // Windows specific
 #define WIN32_LEAN_AND_MEAN
@@ -13,7 +17,7 @@
 
 enum class Wave {
     SIN = 0,
-    SAW,
+    SQA,
     TRI,
 };
 
@@ -21,6 +25,7 @@ void windioInitialize();
 void windioDestroy();
 void windioGetDevsInfo();
 void windioPlay(double frequency, double volume, Wave wave);
+void windioStop();
 
 #endif // WINDIO_HPP
 
@@ -32,19 +37,24 @@ static constexpr DWORD SAMPLES_SZ = 256;
 static constexpr DWORD SAMPLE_RATE = 44100;
 static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
 
-static DWORD FREE_BLOCKS = BLOCKS_SZ;
-static UINT AV_DEVS = 0;
-static size_t CURRENT_BLOCK = 0;
-static double GLOBAL_TIME = 0.0;
-static HWAVEOUT DEVICE;
-static WAVEHDR* WAVE_HDR;
-static short* BLOCK;
+static DWORD free_blocks = BLOCKS_SZ;
+static UINT av_devs = 0;
+static size_t current_block = 0;
+static HWAVEOUT device;
+static WAVEHDR* wave_hdr;
+static short* block;
 
-// Frequency as Angular velocity
-static inline double FAA(double f) noexcept
-{
-    return f * 2.0 * PI;
-}
+static std::atomic<double> global_time = 0.0;
+static std::thread music_thread;
+static std::mutex mux_play;
+static std::atomic<bool> play_music;
+static std::condition_variable loop_again;
+
+static struct settings {
+    std::atomic<double> frequency = 0.0;
+    std::atomic<double> volume = 0.0;
+    std::atomic<Wave> wave = Wave::SIN;
+} output_settings;
 
 static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
@@ -54,7 +64,10 @@ static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, 
     (void) dwParam2;
 
     if (uMsg == WOM_DONE) {
-	FREE_BLOCKS++;
+	free_blocks++;
+	
+	std::lock_guard<std::mutex> lm(mux_play);
+	loop_again.notify_one();
     }
 }
 
@@ -62,9 +75,11 @@ static void error(const char* err_msg)
 {
     fprintf(stderr, err_msg);
     windioDestroy();
+    
     exit(1);
 }
 
+static void windioPlayThread();
 void windioInitialize()
 {
     UINT devices = waveOutGetNumDevs();
@@ -74,7 +89,7 @@ void windioInitialize()
 	error("ERROR: No output devices were found!\n");
     }
     
-    AV_DEVS = devices;
+    av_devs = devices;
 
     wave.wFormatTag = WAVE_FORMAT_PCM;
     wave.nSamplesPerSec = SAMPLE_RATE;
@@ -84,46 +99,56 @@ void windioInitialize()
     wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
     wave.cbSize = 0;
     
-    MMRESULT open_result = waveOutOpen(&DEVICE, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
+    MMRESULT open_result = waveOutOpen(&device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
 
     if (open_result != MMSYSERR_NOERROR) {
 	error("ERROR: Default audio output device could not be properly opened!\n");
     }
 
-    WAVE_HDR = new WAVEHDR[BLOCKS_SZ];
+    wave_hdr = new WAVEHDR[BLOCKS_SZ];
 
-    if (WAVE_HDR == nullptr) {
+    if (wave_hdr == nullptr) {
 	error("ERROR: Could not allocate enough memory for WAVEHDR\n");
     }
 
-    BLOCK = new short[BLOCKS_SZ * SAMPLES_SZ];
+    block = new short[BLOCKS_SZ * SAMPLES_SZ];
 
-    if (BLOCK == nullptr) {
+    if (block == nullptr) {
 	error("ERROR: Could not allocate enough memory for a block of samples\n");
     }
     
-    memset(WAVE_HDR, 0, sizeof(WAVEHDR) * BLOCKS_SZ);
-    memset(BLOCK, 0, sizeof(short) * BLOCKS_SZ * SAMPLES_SZ);
+    memset(wave_hdr, 0, sizeof(WAVEHDR) * BLOCKS_SZ);
+    memset(block, 0, sizeof(short) * BLOCKS_SZ * SAMPLES_SZ);
 
-    // WAVE_HDR will be pointing to data from BLOCK
+    // wave_hdr will be pointing to data from block
     for (DWORD i = 0; i < BLOCKS_SZ; ++i) {
-	WAVE_HDR[i].dwBufferLength = SAMPLES_SZ * sizeof(short);
-	WAVE_HDR[i].lpData = reinterpret_cast<LPSTR>(((BLOCK + (i * SAMPLES_SZ))));
+	wave_hdr[i].dwBufferLength = SAMPLES_SZ * sizeof(short);
+	wave_hdr[i].lpData = reinterpret_cast<LPSTR>(((block + (i * SAMPLES_SZ))));
     }
+
+    // Start music output thread
+    play_music = true;
+    music_thread = std::thread(windioPlayThread);
+
+    std::lock_guard<std::mutex> lm(mux_play);
+    loop_again.notify_one();
 }
 
 void windioDestroy()
 {
-    if (BLOCK) {
-	delete[] BLOCK;
+    if (block) {
+	delete[] block;
     }
 
-    if (WAVE_HDR) {
-	delete[] WAVE_HDR;
+    if (wave_hdr) {
+	delete[] wave_hdr;
     }
 
-    // TODO(Aiden): Make sure nothing is playing before closing the device.
-    waveOutClose(DEVICE);
+    play_music = false;
+    music_thread.join();
+
+    waveOutReset(device);
+    waveOutClose(device);
 }
 
 void windioGetDevsInfo()
@@ -131,7 +156,7 @@ void windioGetDevsInfo()
     WAVEOUTCAPS caps = {};
     
     printf("Devices Found:\n");
-    for (UINT i = 0; i < AV_DEVS; ++i) {
+    for (UINT i = 0; i < av_devs; ++i) {
 	MMRESULT result = waveOutGetDevCaps(i, &caps, sizeof(WAVEOUTCAPS));
 
 	if (result != MMSYSERR_NOERROR) {
@@ -142,48 +167,84 @@ void windioGetDevsInfo()
     }
 }
 
-void windioPlay(double frequency, double volume = 0.3, Wave wave = Wave::SIN)
+void windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.1)
 {
-    // TODO(Aiden): Appropriate function for selected wave.
-    (void) wave;
-
     if (volume > 1.0) {
 	volume = 1.0;
     } else if (volume < 0.0) {
 	volume = 0.0;
     }
+
+    output_settings.frequency = frequency * 2.0 * PI;
+    output_settings.volume = volume;
+    output_settings.wave = wave;
+}
+
+static double get_sample_from_settings()
+{
+    double out_freq = 0.0;
     
-    if (FREE_BLOCKS == 0) return;
-    FREE_BLOCKS--;
-    
-    if (WAVE_HDR[CURRENT_BLOCK].dwFlags & WHDR_PREPARED) {
-	MMRESULT unprepare_result = waveOutUnprepareHeader(DEVICE, &WAVE_HDR[CURRENT_BLOCK], sizeof(WAVEHDR));
+    switch (output_settings.wave) {
+	case Wave::SIN:
+	    out_freq = sin(output_settings.frequency * global_time);
+	    break;
+	case Wave::SQA:
+	    out_freq = sin(output_settings.frequency * global_time) > 0.0 ? 1.0 : -1.0;
+	    break;
+	case Wave::TRI:
+	    out_freq = asin(sin(output_settings.frequency * global_time)) * (2.0 / PI);
+	    break;
+	default:
+	    assert(false && "Unreachable, invalid wave provided!");
+    }
+
+    return out_freq * output_settings.volume;
+}
+
+static void windioPlayThread()
+{
+    while (play_music) {
+	// Instead of 'continue;' it waits until it can loop again,
+	// not looping infinitely.
+	std::unique_lock<std::mutex> lm(mux_play);
+	loop_again.wait(lm, []() { return free_blocks; });
 	
-	if (unprepare_result != MMSYSERR_NOERROR) {
-	    error("ERROR: Could not clear wave header\n");
+	free_blocks--;
+    
+	if (wave_hdr[current_block].dwFlags & WHDR_PREPARED) {
+	    MMRESULT unprepare_result = waveOutUnprepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
+	
+	    if (unprepare_result != MMSYSERR_NOERROR) {
+		error("ERROR: Could not clear wave header\n");
+	    }
 	}
-    }
 
-    for (DWORD i = 0; i < SAMPLES_SZ; ++i) {
-	short sample_freq = static_cast<short>((sin(FAA(frequency) * GLOBAL_TIME) * volume) * SHRT_MAX);
-	
-	BLOCK[(CURRENT_BLOCK * SAMPLES_SZ) + i] = sample_freq;
-	GLOBAL_TIME += TIME_STEP;
-    }
+	for (DWORD i = 0; i < SAMPLES_SZ; ++i) {
+	    short sample_freq = static_cast<short>(get_sample_from_settings() * SHRT_MAX);
+
+	    block[(current_block * SAMPLES_SZ) + i] = sample_freq;
+	    global_time += TIME_STEP;
+	}
     
-    MMRESULT prepare_result = waveOutPrepareHeader(DEVICE, &WAVE_HDR[CURRENT_BLOCK], sizeof(WAVEHDR));
+	MMRESULT prepare_result = waveOutPrepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
 
-    if (prepare_result != MMSYSERR_NOERROR) {
-	error("ERROR: Could not prepare wave header\n");
-    }
+	if (prepare_result != MMSYSERR_NOERROR) {
+	    error("ERROR: Could not prepare wave header\n");
+	}
 
-    MMRESULT write_result = waveOutWrite(DEVICE, &WAVE_HDR[CURRENT_BLOCK], sizeof(WAVEHDR));
+	MMRESULT write_result = waveOutWrite(device, &wave_hdr[current_block], sizeof(WAVEHDR));
     
-    if (write_result != MMSYSERR_NOERROR) {
-	error("ERROR: Could not send audio to output device\n");
-    }
+	if (write_result != MMSYSERR_NOERROR) {
+	    error("ERROR: Could not send audio to output device\n");
+	}
 
-    CURRENT_BLOCK = (CURRENT_BLOCK + 1) % BLOCKS_SZ;
+	current_block = (current_block + 1) % BLOCKS_SZ;
+    }
+}
+
+void windioStop()
+{
+    output_settings.frequency = 0.0;
 }
 
 #endif // WINDIO_IMPLEMENTATION

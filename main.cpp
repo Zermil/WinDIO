@@ -22,12 +22,13 @@ int main()
 	if (GetAsyncKeyState(KEY_A) & 0x01) {
 	    windioPlay(440.0);
 	}
-
+	
 	if (GetAsyncKeyState(KEY_S) & 0x01) {
 	    windioPlay(264.0);
 	}
-
+	
 	if (GetAsyncKeyState(VK_ESCAPE) & 0x01) {
+	    windioStop();
 	    running = false;
 	}
     }
