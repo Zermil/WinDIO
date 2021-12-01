@@ -21,11 +21,15 @@ enum class Wave {
     TRI,
 };
 
-void windioInitialize();
+struct output_settings {
+    std::atomic<double> frequency;
+    std::atomic<double> volume;
+    std::atomic<Wave> wave;
+};
+
+void windioInitialize(output_settings* settings);
 void windioDestroy();
 void windioGetDevsInfo();
-void windioPlay(double frequency, double volume, Wave wave);
-void windioStop();
 
 #endif // WINDIO_HPP
 
@@ -33,7 +37,7 @@ void windioStop();
 
 static const double PI = 2.0 * acos(0.0);
 static constexpr DWORD BLOCKS_SZ = 8;
-static constexpr DWORD SAMPLES_SZ = 256;
+static constexpr DWORD SAMPLES_SZ = 512;
 static constexpr DWORD SAMPLE_RATE = 44100;
 static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
 
@@ -49,11 +53,7 @@ static std::thread music_thread;
 static std::mutex mux_play;
 static std::condition_variable loop_again;
 
-static struct settings {
-    std::atomic<double> frequency = 0.0;
-    std::atomic<double> volume = 0.0;
-    std::atomic<Wave> wave = Wave::SIN;
-} output_settings;
+static void windioPlayThread(output_settings* settings);
 
 static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
@@ -78,8 +78,7 @@ static void error(const char* err_msg)
     exit(1);
 }
 
-static void windioPlayThread();
-void windioInitialize()
+void windioInitialize(output_settings* settings)
 {
     UINT devices = waveOutGetNumDevs();
     WAVEFORMATEX wave = {};
@@ -98,7 +97,7 @@ void windioInitialize()
     wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
     wave.cbSize = 0;
     
-    MMRESULT open_result = waveOutOpen(&device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION | WAVE_ALLOWSYNC);
+    MMRESULT open_result = waveOutOpen(&device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
 
     if (open_result != MMSYSERR_NOERROR) {
 	error("ERROR: Default audio output device could not be properly opened!\n");
@@ -126,11 +125,12 @@ void windioInitialize()
     }
 
     // Start music output thread
-    play_music = true;
-    music_thread = std::thread(windioPlayThread);
+    settings->frequency = 0.0;
+    settings->volume = 0.2;
+    settings->wave = Wave::SIN;
 
-    std::lock_guard<std::mutex> lm(mux_play);
-    loop_again.notify_one();
+    play_music = true;
+    music_thread = std::thread(windioPlayThread, settings);
 }
 
 void windioDestroy()
@@ -166,41 +166,34 @@ void windioGetDevsInfo()
     }
 }
 
-void windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.1)
+// Frequency as angular velocity
+static inline double fav(const double& f) noexcept
 {
-    if (volume > 1.0) {
-	volume = 1.0;
-    } else if (volume < 0.0) {
-	volume = 0.0;
-    }
-
-    output_settings.frequency = frequency * 2.0 * PI;
-    output_settings.volume = volume;
-    output_settings.wave = wave;
+    return f * 2.0 * PI;
 }
 
-static double get_sample_from_settings()
+static double get_sample_from_settings(output_settings* settings)
 {
     double out_freq = 0.0;
     
-    switch (output_settings.wave) {
+    switch (settings->wave) {
 	case Wave::SIN:
-	    out_freq = sin(output_settings.frequency * global_time);
+	    out_freq = sin(fav(settings->frequency) * global_time);
 	    break;
 	case Wave::SQA:
-	    out_freq = sin(output_settings.frequency * global_time) > 0.0 ? 1.0 : -1.0;
+	    out_freq = sin(fav(settings->frequency) * global_time) > 0.0 ? 1.0 : -1.0;
 	    break;
 	case Wave::TRI:
-	    out_freq = asin(sin(output_settings.frequency * global_time)) * (2.0 / PI);
+	    out_freq = asin(sin(fav(settings->frequency) * global_time)) * (2.0 / PI);
 	    break;
 	default:
 	    assert(false && "Unreachable, invalid wave provided!");
     }
 
-    return out_freq * output_settings.volume;
+    return out_freq * settings->volume;
 }
 
-static void windioPlayThread()
+static void windioPlayThread(output_settings* settings)
 {
     size_t current_block = 0;
     
@@ -221,7 +214,7 @@ static void windioPlayThread()
 	}
 
 	for (DWORD i = 0; i < SAMPLES_SZ; ++i) {
-	    short sample_freq = static_cast<short>(get_sample_from_settings() * SHRT_MAX);
+	    short sample_freq = static_cast<short>(get_sample_from_settings(settings) * SHRT_MAX);
 
 	    block[(current_block * SAMPLES_SZ) + i] = sample_freq;
 	    global_time = (global_time + TIME_STEP);
@@ -241,11 +234,6 @@ static void windioPlayThread()
 
 	current_block = (current_block + 1) % BLOCKS_SZ;
     }
-}
-
-void windioStop()
-{
-    output_settings.frequency = 0.0;
 }
 
 #endif // WINDIO_IMPLEMENTATION

@@ -13,22 +13,26 @@ enum Key : uint8_t {
 
 int main()
 {
-    windioInitialize();
+    output_settings settings;
+    
+    windioInitialize(&settings);
     windioGetDevsInfo();
 
     bool running = true;
     
     while (running) {
 	if (GetAsyncKeyState(KEY_A) & 0x01) {
-	    windioPlay(440.0);
+	    settings.wave = Wave::SIN;
+	    settings.frequency = 440.0;
 	}
-	
+
 	if (GetAsyncKeyState(KEY_S) & 0x01) {
-	    windioPlay(264.0);
+	    settings.wave = Wave::TRI;
+	    settings.frequency = 264.0;
 	}
 	
 	if (GetAsyncKeyState(VK_ESCAPE) & 0x01) {
-	    windioStop();
+	    settings.frequency = 0.0;
 	    running = false;
 	}
     }
