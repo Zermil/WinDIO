@@ -22,8 +22,7 @@ int main()
     
     while (running) {
 	if (GetAsyncKeyState(KEY_A) & 0x01) {
-	    settings.wave = Wave::SIN;
-	    settings.frequency = 440.0;
+	    windioPlay(440.0);
 	}
 
 	if (GetAsyncKeyState(KEY_S) & 0x01) {
