@@ -7,6 +7,9 @@ Heavily inspired by: [OlcNoiseMaker](https://github.com/OneLoneCoder/synth/blob/
 
 Created as an incentive to learn more about Windows API and, at the very least, the basics of threading.
 
+## Used In
+- [MaiDai](https://github.com/zermil/maidai)
+
 ## Quick start
 
 ### Compile/Build (Test):
