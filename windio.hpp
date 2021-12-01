@@ -31,23 +31,22 @@ void windioStop();
 
 #ifdef WINDIO_IMPLEMENTATION
 
-static constexpr double PI = 2.0 * acos(0.0);
+static const double PI = 2.0 * acos(0.0);
 static constexpr DWORD BLOCKS_SZ = 8;
 static constexpr DWORD SAMPLES_SZ = 256;
 static constexpr DWORD SAMPLE_RATE = 44100;
 static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
 
-static DWORD free_blocks = BLOCKS_SZ;
 static UINT av_devs = 0;
-static size_t current_block = 0;
 static HWAVEOUT device;
 static WAVEHDR* wave_hdr;
 static short* block;
 
+static std::atomic<DWORD> free_blocks = BLOCKS_SZ;
 static std::atomic<double> global_time = 0.0;
+static std::atomic<bool> play_music;
 static std::thread music_thread;
 static std::mutex mux_play;
-static std::atomic<bool> play_music;
 static std::condition_variable loop_again;
 
 static struct settings {
@@ -203,11 +202,13 @@ static double get_sample_from_settings()
 
 static void windioPlayThread()
 {
+    size_t current_block = 0;
+    
     while (play_music) {
 	// Instead of 'continue;' it waits until it can loop again,
 	// not looping infinitely.
 	std::unique_lock<std::mutex> lm(mux_play);
-	loop_again.wait(lm, []() { return free_blocks; });
+	loop_again.wait(lm, []() { return free_blocks != 0; });
 	
 	free_blocks--;
     
