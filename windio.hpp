@@ -200,8 +200,10 @@ static void windioPlayThread(output_settings* settings)
     while (play_music) {
 	// Instead of 'continue;' it waits until it can loop again,
 	// not looping infinitely.
-	std::unique_lock<std::mutex> lm(mux_play);
-	loop_again.wait(lm, []() { return free_blocks != 0; });
+	if (free_blocks == 0) {
+	    std::unique_lock<std::mutex> lm(mux_play);
+	    loop_again.wait(lm, []() { return free_blocks != 0; });
+	}
 	
 	free_blocks--;
     
