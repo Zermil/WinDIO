@@ -9,6 +9,7 @@
 #include <thread>
 #include <atomic>
 #include <condition_variable>
+#include <vector>
 
 // Windows specific
 #define WIN32_LEAN_AND_MEAN
@@ -34,6 +35,7 @@ struct output_settings {
 void windioInitialize(output_settings* settings);
 void windioDestroy();
 void windioPlay(double frequency, Wave wave, double volume);
+void windioPlayMultiple(std::vector<double> frequencies, Wave wave, double volume);
 void windioStop();
 void windioGetDevsInfo();
 
@@ -73,6 +75,12 @@ static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, 
 	std::lock_guard<std::mutex> lm(mux_play);
 	loop_again.notify_one();
     }
+}
+
+// Frequency as angular velocity
+static inline double fav(const double& f) noexcept
+{
+    return f * 2.0 * PI;
 }
 
 static void error(const char* err_msg)
@@ -180,15 +188,22 @@ void windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.2)
     instance_settings->frequency = frequency;
 }
 
+void windioPlayMultiple(std::vector<double> frequencies, Wave wave = Wave::SIN, double volume = 0.2)
+{
+    double frequency = 0.0;
+    
+    for (const double& freq : frequencies) {
+	frequency += freq;
+    }
+    
+    instance_settings->volume = volume;
+    instance_settings->wave = wave;
+    instance_settings->frequency = frequency;
+}
+
 void windioStop()
 {
     instance_settings->frequency = 0.0;
-}
-
-// Frequency as angular velocity
-static inline double fav(const double& f) noexcept
-{
-    return f * 2.0 * PI;
 }
 
 static double get_sample_from_settings()
