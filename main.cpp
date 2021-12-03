@@ -15,7 +15,6 @@ enum Key : uint8_t {
 int main()
 {
     output_settings settings;
-    
     windioInitialize(&settings);
     windioGetDevsInfo();
 
@@ -35,7 +34,7 @@ int main()
 	
 	if (GetAsyncKeyState(KEY_S) & 0x01) {
 	    settings.wave = Wave::TRI;
-	    settings.frequency = 264.0;
+	    settings.frequency = 261.63;
 	}
 
 	if (GetAsyncKeyState(KEY_D) & 0x01) {

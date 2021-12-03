@@ -8,8 +8,8 @@
 #include <climits>
 #include <thread>
 #include <atomic>
-#include <condition_variable>
 #include <vector>
+#include <condition_variable>
 
 // Windows specific
 #define WIN32_LEAN_AND_MEAN
@@ -26,8 +26,9 @@ struct output_settings {
     std::atomic<double> frequency;
     std::atomic<double> volume;
     std::atomic<Wave> wave;
-
-    // If you know what you're doing, you can modify these, otherwise better leave them alone.
+    
+    // If you _really_ know what you're doing, you can modify these, otherwise better leave them alone.
+    HWAVEOUT device;
     WAVEHDR* wave_hdr;
     short* block;
 };
@@ -35,7 +36,7 @@ struct output_settings {
 void windioInitialize(output_settings* settings);
 void windioDestroy();
 void windioPlay(double frequency, Wave wave, double volume);
-void windioPlayMultiple(std::vector<double> frequencies, Wave wave, double volume);
+void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave, double volume);
 void windioStop();
 void windioGetDevsInfo();
 
@@ -49,8 +50,6 @@ static constexpr DWORD SAMPLES_SZ = 256;
 static constexpr DWORD SAMPLE_RATE = 44100;
 static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
 
-static UINT av_devs = 0;
-static HWAVEOUT device;
 static output_settings* instance_settings;
 
 static std::atomic<DWORD> free_blocks = BLOCKS_SZ;
@@ -91,17 +90,10 @@ static void error(const char* err_msg)
     exit(1);
 }
 
-void windioInitialize(output_settings* settings)
+static WAVEFORMATEX initialize_wave_struct()
 {
-    UINT devices = waveOutGetNumDevs();
     WAVEFORMATEX wave = {};
     
-    if (devices == 0) {
-	error("ERROR: No output devices were found!\n");
-    }
-    
-    av_devs = devices;
-
     wave.wFormatTag = WAVE_FORMAT_PCM;
     wave.nSamplesPerSec = SAMPLE_RATE;
     wave.nChannels = 1;
@@ -110,7 +102,19 @@ void windioInitialize(output_settings* settings)
     wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
     wave.cbSize = 0;
     
-    MMRESULT open_result = waveOutOpen(&device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
+    return wave;
+}
+
+void windioInitialize(output_settings* settings)
+{
+    UINT devices = waveOutGetNumDevs();
+    
+    if (devices == 0) {
+	error("ERROR: No output devices were found!\n");
+    }
+    
+    WAVEFORMATEX wave = initialize_wave_struct();
+    MMRESULT open_result = waveOutOpen(&settings->device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
 
     if (open_result != MMSYSERR_NOERROR) {
 	error("ERROR: Default audio output device could not be properly opened!\n");
@@ -150,6 +154,9 @@ void windioInitialize(output_settings* settings)
 
 void windioDestroy()
 {
+    play_music = false;
+    music_thread.join();
+
     if (instance_settings->block) {
 	delete[] instance_settings->block;
     }
@@ -158,19 +165,17 @@ void windioDestroy()
 	delete[] instance_settings->wave_hdr;
     }
 
-    play_music = false;
-    music_thread.join();
-
-    waveOutReset(device);
-    waveOutClose(device);
+    waveOutReset(instance_settings->device);
+    waveOutClose(instance_settings->device);
 }
 
 void windioGetDevsInfo()
 {
     WAVEOUTCAPS caps = {};
+    UINT devices = waveOutGetNumDevs();
     
     printf("Devices Found:\n");
-    for (UINT i = 0; i < av_devs; ++i) {
+    for (UINT i = 0; i < devices; ++i) {
 	MMRESULT result = waveOutGetDevCaps(i, &caps, sizeof(WAVEOUTCAPS));
 
 	if (result != MMSYSERR_NOERROR) {
@@ -188,10 +193,10 @@ void windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.2)
     instance_settings->frequency = frequency;
 }
 
-void windioPlayMultiple(std::vector<double> frequencies, Wave wave = Wave::SIN, double volume = 0.2)
+void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave = Wave::SIN, double volume = 0.2)
 {
     double frequency = 0.0;
-    
+
     for (const double& freq : frequencies) {
 	frequency += freq;
     }
@@ -206,25 +211,21 @@ void windioStop()
     instance_settings->frequency = 0.0;
 }
 
-static double get_sample_from_settings()
-{
-    double out_freq = 0.0;
-    
+static double get_sound_frequency()
+{    
     switch (instance_settings->wave) {
 	case Wave::SIN:
-	    out_freq = sin(fav(instance_settings->frequency) * global_time);
-	    break;
+	    return sin(fav(instance_settings->frequency) * global_time);
 	case Wave::SQA:
-	    out_freq = sin(fav(instance_settings->frequency) * global_time) > 0.0 ? 1.0 : -1.0;
-	    break;
+	    return sin(fav(instance_settings->frequency) * global_time) > 0.0 ? 1.0 : -1.0;
 	case Wave::TRI:
-	    out_freq = asin(sin(fav(instance_settings->frequency) * global_time)) * (2.0 / PI);
-	    break;
+	    return asin(sin(fav(instance_settings->frequency) * global_time)) * (2.0 / PI);
 	default:
 	    assert(false && "Unreachable, invalid wave provided!");
     }
-
-    return out_freq * instance_settings->volume;
+    
+    // Realistically this should never happened, but I still don't trust computers.
+    return 0.0;
 }
 
 static void windioPlayThread()
@@ -242,7 +243,7 @@ static void windioPlayThread()
 	free_blocks--;
     
 	if (instance_settings->wave_hdr[current_block].dwFlags & WHDR_PREPARED) {
-	    MMRESULT unprepare_result = waveOutUnprepareHeader(device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
+	    MMRESULT unprepare_result = waveOutUnprepareHeader(instance_settings->device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
 	
 	    if (unprepare_result != MMSYSERR_NOERROR) {
 		error("ERROR: Could not clear wave header\n");
@@ -250,19 +251,19 @@ static void windioPlayThread()
 	}
 
 	for (DWORD i = 0; i < SAMPLES_SZ; ++i) {
-	    short sample_freq = static_cast<short>(get_sample_from_settings() * SHRT_MAX);
+	    short sample_freq = static_cast<short>((get_sound_frequency() * instance_settings->volume) * SHRT_MAX);
 
 	    instance_settings->block[(current_block * SAMPLES_SZ) + i] = sample_freq;
 	    global_time = (global_time + TIME_STEP);
 	}
     
-	MMRESULT prepare_result = waveOutPrepareHeader(device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
+	MMRESULT prepare_result = waveOutPrepareHeader(instance_settings->device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
 
 	if (prepare_result != MMSYSERR_NOERROR) {
 	    error("ERROR: Could not prepare wave header\n");
 	}
 
-	MMRESULT write_result = waveOutWrite(device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
+	MMRESULT write_result = waveOutWrite(instance_settings->device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
     
 	if (write_result != MMSYSERR_NOERROR) {
 	    error("ERROR: Could not send audio to output device\n");
