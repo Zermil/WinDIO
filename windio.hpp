@@ -16,6 +16,11 @@
 #include <Windows.h>
 #include <mmsystem.h>
 
+// TODO(Aiden): Different sounds, piano like, drum like etc.
+// TODO(Aiden): Have a way to distinguish frequencies (better polyphony).
+// TODO(Aiden): ADSR, more pleasant sounds.
+// TODO(Aiden): Ensure that chords sound fine.
+
 enum class Wave {
     SIN = 0,
     SQA,
@@ -52,6 +57,7 @@ static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
 
 static output_settings* instance_settings;
 
+// TODO(Aiden): There's a better way to design this library and to get rid of this.
 static std::atomic<DWORD> free_blocks = BLOCKS_SZ;
 static std::atomic<double> global_time = 0.0;
 static std::atomic<bool> play_music;
