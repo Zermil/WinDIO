@@ -1,5 +1,7 @@
 # WinDIO
 
+***IN ACTIVE DEVELOPMENT***
+
 **Bare bones** of an audio output library for Windows written in C++ with Windows API.
 Outputs a specific sound based on provided frequency.
 
