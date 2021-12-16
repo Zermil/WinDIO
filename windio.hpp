@@ -21,6 +21,26 @@
 // TODO(Aiden): ADSR, more pleasant sounds.
 // TODO(Aiden): Ensure that chords sound fine.
 
+#ifndef WINDIO_PI
+#define WINDIO_PI 3.141592653
+#endif
+
+#ifndef WINDIO_BLOCKS_SZ
+#define WINDIO_BLOCKS_SZ 8
+#endif
+
+#ifndef WINDIO_SAMPLES_SZ
+#define WINDIO_SAMPLES_SZ 256
+#endif
+
+#ifndef WINDIO_SAMPLE_RATE
+#define WINDIO_SAMPLE_RATE 44100
+#endif
+
+#ifndef WINDIO_TIME_STEP
+#define WINDIO_TIME_STEP (1.0f / WINDIO_SAMPLE_RATE)
+#endif
+
 enum class Wave {
     SIN = 0,
     SQA,
@@ -28,90 +48,59 @@ enum class Wave {
 };
 
 struct output_settings {
+    output_settings();
+    ~output_settings();
+
+    inline double fav(const double& f) const noexcept { return f * 2.0 * WINDIO_PI; } // Frequency as angular velocity
+    double get_sound_frequency();
+    void windioPlay(double frequency, Wave wave, double volume);
+    void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave, double volume);
+    void windioStop();
+    void windioGetDevsInfo();
+
     std::atomic<double> frequency;
     std::atomic<double> volume;
     std::atomic<Wave> wave;
+
+    // If you _really_ know what you're doing, you can modify anything below, otherwise, leave them alone.
+    // We are all consenting adults :)
+    void windioPlayThread();
+    static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2);
+    void error(const char* err_msg);
+    WAVEFORMATEX initialize_wave_struct();
     
-    // If you _really_ know what you're doing, you can modify these, otherwise better leave them alone.
     HWAVEOUT device;
     WAVEHDR* wave_hdr;
     short* block;
+    std::atomic<DWORD> free_blocks;
+    std::atomic<double> global_time;
+    std::atomic<bool> play_music;
+    std::thread music_thread;
+    std::mutex mux_play;
+    std::condition_variable loop_again;    
 };
-
-void windioInitialize(output_settings* settings);
-void windioDestroy();
-void windioPlay(double frequency, Wave wave, double volume);
-void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave, double volume);
-void windioStop();
-void windioGetDevsInfo();
 
 #endif // WINDIO_HPP
 
 #ifdef WINDIO_IMPLEMENTATION
 
-static const double PI = 2.0 * acos(0.0);
-static constexpr DWORD BLOCKS_SZ = 8;
-static constexpr DWORD SAMPLES_SZ = 256;
-static constexpr DWORD SAMPLE_RATE = 44100;
-static constexpr double TIME_STEP = 1.0 / SAMPLE_RATE;
-
-static output_settings* instance_settings;
-
-// TODO(Aiden): There's a better way to design this library and to get rid of this.
-static std::atomic<DWORD> free_blocks = BLOCKS_SZ;
-static std::atomic<double> global_time = 0.0;
-static std::atomic<bool> play_music;
-static std::thread music_thread;
-static std::mutex mux_play;
-static std::condition_variable loop_again;
-
-static void windioPlayThread();
-
-static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
+void CALLBACK output_settings::waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
     (void) hwo;
-    (void) dwInstance;
     (void) dwParam1;
     (void) dwParam2;
 
+    output_settings *settings = reinterpret_cast<output_settings*>(dwInstance);
+    
     if (uMsg == WOM_DONE) {
-	free_blocks++;
+	settings->free_blocks++;
 	
-	std::lock_guard<std::mutex> lm(mux_play);
-	loop_again.notify_one();
+	std::lock_guard<std::mutex> lm(settings->mux_play);
+	settings->loop_again.notify_one();
     }
 }
 
-// Frequency as angular velocity
-static inline double fav(const double& f) noexcept
-{
-    return f * 2.0 * PI;
-}
-
-static void error(const char* err_msg)
-{
-    fprintf(stderr, err_msg);
-    windioDestroy();
-    
-    exit(1);
-}
-
-static WAVEFORMATEX initialize_wave_struct()
-{
-    WAVEFORMATEX wave = {};
-    
-    wave.wFormatTag = WAVE_FORMAT_PCM;
-    wave.nSamplesPerSec = SAMPLE_RATE;
-    wave.nChannels = 1;
-    wave.wBitsPerSample = 16;
-    wave.nBlockAlign = (wave.nChannels * (wave.wBitsPerSample / 8));
-    wave.nAvgBytesPerSec = (wave.nSamplesPerSec * wave.nBlockAlign);
-    wave.cbSize = 0;
-    
-    return wave;
-}
-
-void windioInitialize(output_settings* settings)
+output_settings::output_settings()
 {
     UINT devices = waveOutGetNumDevs();
     
@@ -119,63 +108,86 @@ void windioInitialize(output_settings* settings)
 	error("ERROR: No output devices were found!\n");
     }
     
-    WAVEFORMATEX wave = initialize_wave_struct();
-    MMRESULT open_result = waveOutOpen(&settings->device, 0, &wave, reinterpret_cast<DWORD_PTR>(waveOutProc), 0, CALLBACK_FUNCTION);
+    WAVEFORMATEX wave_bin_hdr = initialize_wave_struct();
+    MMRESULT open_result = waveOutOpen(&device, 0, &wave_bin_hdr, reinterpret_cast<DWORD_PTR>(&output_settings::waveOutProc), reinterpret_cast<DWORD_PTR>(this), CALLBACK_FUNCTION);
 
     if (open_result != MMSYSERR_NOERROR) {
 	error("ERROR: Default audio output device could not be properly opened!\n");
     }
 
-    settings->wave_hdr = new WAVEHDR[BLOCKS_SZ];
+    wave_hdr = new WAVEHDR[WINDIO_BLOCKS_SZ];
 
-    if (settings->wave_hdr == nullptr) {
+    if (wave_hdr == nullptr) {
 	error("ERROR: Could not allocate enough memory for WAVEHDR\n");
     }
 
-    settings->block = new short[BLOCKS_SZ * SAMPLES_SZ];
+    block = new short[WINDIO_BLOCKS_SZ * WINDIO_SAMPLES_SZ];
 
-    if (settings->block == nullptr) {
+    if (block == nullptr) {
 	error("ERROR: Could not allocate enough memory for a block of samples\n");
     }
     
-    memset(settings->wave_hdr, 0, sizeof(WAVEHDR) * BLOCKS_SZ);
-    memset(settings->block, 0, sizeof(short) * BLOCKS_SZ * SAMPLES_SZ);
+    memset(wave_hdr, 0, sizeof(WAVEHDR) * WINDIO_BLOCKS_SZ);
+    memset(block, 0, sizeof(short) * WINDIO_BLOCKS_SZ * WINDIO_SAMPLES_SZ);
 
     // wave_hdr will be pointing to data from block
-    for (DWORD i = 0; i < BLOCKS_SZ; ++i) {
-	settings->wave_hdr[i].dwBufferLength = SAMPLES_SZ * sizeof(short);
-	settings->wave_hdr[i].lpData = reinterpret_cast<LPSTR>(((settings->block + (i * SAMPLES_SZ))));
+    for (DWORD i = 0; i < WINDIO_BLOCKS_SZ; ++i) {
+	wave_hdr[i].dwBufferLength = WINDIO_SAMPLES_SZ * sizeof(short);
+	wave_hdr[i].lpData = reinterpret_cast<LPSTR>(((block + (i * WINDIO_SAMPLES_SZ))));
     }
 
     // Start music output thread
-    settings->frequency = 0.0;
-    settings->volume = 0.2;
-    settings->wave = Wave::SIN;
-
-    instance_settings = settings;
-
+    global_time = 0.0;
+    free_blocks = WINDIO_BLOCKS_SZ;
+    frequency = 0.0;
+    volume = 0.2;
+    wave = Wave::SIN;
+    
     play_music = true;
-    music_thread = std::thread(windioPlayThread);
+    music_thread = std::thread(windioPlayThread, this);
 }
 
-void windioDestroy()
+output_settings::~output_settings()
 {
     play_music = false;
     music_thread.join();
 
-    if (instance_settings->block) {
-	delete[] instance_settings->block;
+    if (block) {
+	delete[] block;
     }
 
-    if (instance_settings->wave_hdr) {
-	delete[] instance_settings->wave_hdr;
+    if (wave_hdr) {
+	delete[] wave_hdr;
     }
 
-    waveOutReset(instance_settings->device);
-    waveOutClose(instance_settings->device);
+    waveOutReset(device);
+    waveOutClose(device);
 }
 
-void windioGetDevsInfo()
+WAVEFORMATEX output_settings::initialize_wave_struct()
+{
+    WAVEFORMATEX wave_bin_hdr = {};
+    
+    wave_bin_hdr.wFormatTag = WAVE_FORMAT_PCM;
+    wave_bin_hdr.nSamplesPerSec = WINDIO_SAMPLE_RATE;
+    wave_bin_hdr.nChannels = 1;
+    wave_bin_hdr.wBitsPerSample = 16;
+    wave_bin_hdr.nBlockAlign = (wave_bin_hdr.nChannels * (wave_bin_hdr.wBitsPerSample / 8));
+    wave_bin_hdr.nAvgBytesPerSec = (wave_bin_hdr.nSamplesPerSec * wave_bin_hdr.nBlockAlign);
+    wave_bin_hdr.cbSize = 0;
+    
+    return wave_bin_hdr;
+}
+
+void output_settings::error(const char* err_msg)
+{
+    fprintf(stderr, err_msg);
+    this->~output_settings();
+    
+    exit(1);
+}
+
+void output_settings::windioGetDevsInfo()
 {
     WAVEOUTCAPS caps = {};
     UINT devices = waveOutGetNumDevs();
@@ -192,14 +204,14 @@ void windioGetDevsInfo()
     }
 }
 
-void windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.2)
+void output_settings::windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.2)
 {
-    instance_settings->volume = volume;
-    instance_settings->wave = wave;
-    instance_settings->frequency = frequency;
+    this->volume = volume;
+    this->wave = wave;
+    this->frequency = frequency;
 }
 
-void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave = Wave::SIN, double volume = 0.2)
+void output_settings::windioPlayMultiple(const std::vector<double>& frequencies, Wave wave = Wave::SIN, double volume = 0.2)
 {
     double frequency = 0.0;
 
@@ -207,25 +219,25 @@ void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave = Wave
 	frequency += freq;
     }
     
-    instance_settings->volume = volume;
-    instance_settings->wave = wave;
-    instance_settings->frequency = frequency;
+    this->volume = volume;
+    this->wave = wave;
+    this->frequency = frequency;
 }
 
-void windioStop()
+void output_settings::windioStop()
 {
-    instance_settings->frequency = 0.0;
+    this->frequency = 0.0;
 }
 
-static double get_sound_frequency()
+double output_settings::get_sound_frequency()
 {    
-    switch (instance_settings->wave) {
+    switch (wave) {
 	case Wave::SIN:
-	    return sin(fav(instance_settings->frequency) * global_time);
+	    return sin(fav(frequency) * global_time);
 	case Wave::SQA:
-	    return sin(fav(instance_settings->frequency) * global_time) > 0.0 ? 1.0 : -1.0;
+	    return sin(fav(frequency) * global_time) > 0.0 ? 1.0 : -1.0;
 	case Wave::TRI:
-	    return asin(sin(fav(instance_settings->frequency) * global_time)) * (2.0 / PI);
+	    return asin(sin(fav(frequency) * global_time)) * (2.0 / WINDIO_PI);
 	default:
 	    assert(false && "Unreachable, invalid wave provided!");
     }
@@ -234,7 +246,7 @@ static double get_sound_frequency()
     return 0.0;
 }
 
-static void windioPlayThread()
+void output_settings::windioPlayThread()
 {
     size_t current_block = 0;
     
@@ -243,39 +255,39 @@ static void windioPlayThread()
 	// not looping infinitely.
 	if (free_blocks == 0) {
 	    std::unique_lock<std::mutex> lm(mux_play);
-	    loop_again.wait(lm, []() { return free_blocks != 0; });
+	    loop_again.wait(lm, [&]() { return free_blocks != 0; });
 	}
 	
 	free_blocks--;
     
-	if (instance_settings->wave_hdr[current_block].dwFlags & WHDR_PREPARED) {
-	    MMRESULT unprepare_result = waveOutUnprepareHeader(instance_settings->device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
+	if (wave_hdr[current_block].dwFlags & WHDR_PREPARED) {
+	    MMRESULT unprepare_result = waveOutUnprepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
 	
 	    if (unprepare_result != MMSYSERR_NOERROR) {
 		error("ERROR: Could not clear wave header\n");
 	    }
 	}
 
-	for (DWORD i = 0; i < SAMPLES_SZ; ++i) {
-	    short sample_freq = static_cast<short>((get_sound_frequency() * instance_settings->volume) * SHRT_MAX);
+	for (DWORD i = 0; i < WINDIO_SAMPLES_SZ; ++i) {
+	    short sample_freq = static_cast<short>((get_sound_frequency() * volume) * SHRT_MAX);
 
-	    instance_settings->block[(current_block * SAMPLES_SZ) + i] = sample_freq;
-	    global_time = (global_time + TIME_STEP);
+	    block[(current_block * WINDIO_SAMPLES_SZ) + i] = sample_freq;
+	    global_time = (global_time + WINDIO_TIME_STEP);
 	}
     
-	MMRESULT prepare_result = waveOutPrepareHeader(instance_settings->device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
+	MMRESULT prepare_result = waveOutPrepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
 
 	if (prepare_result != MMSYSERR_NOERROR) {
 	    error("ERROR: Could not prepare wave header\n");
 	}
 
-	MMRESULT write_result = waveOutWrite(instance_settings->device, &instance_settings->wave_hdr[current_block], sizeof(WAVEHDR));
+	MMRESULT write_result = waveOutWrite(device, &wave_hdr[current_block], sizeof(WAVEHDR));
     
 	if (write_result != MMSYSERR_NOERROR) {
 	    error("ERROR: Could not send audio to output device\n");
 	}
 
-	current_block = (current_block + 1) % BLOCKS_SZ;
+	current_block = (current_block + 1) % WINDIO_BLOCKS_SZ;
     }
 }
 
