@@ -15,8 +15,7 @@ enum Key : uint8_t {
 int main()
 {
     output_settings settings;
-    windioInitialize(&settings);
-    windioGetDevsInfo();
+    settings.windioGetDevsInfo();
 
     std::vector<double> frequencies = {
 	261.63,
@@ -26,10 +25,9 @@ int main()
     };
     
     bool running = true;
-    
     while (running) {
 	if (GetAsyncKeyState(KEY_A) & 0x01) {
-	    windioPlay(440.0);
+	    settings.windioPlay(440.0);
 	}
 	
 	if (GetAsyncKeyState(KEY_S) & 0x01) {
@@ -38,7 +36,7 @@ int main()
 	}
 
 	if (GetAsyncKeyState(KEY_D) & 0x01) {
-	    windioPlayMultiple(frequencies);
+	    settings.windioPlayMultiple(frequencies);
 	}
 	
 	if (GetAsyncKeyState(VK_ESCAPE) & 0x01) {
@@ -46,7 +44,6 @@ int main()
 	    running = false;
 	}
     }
-
-    windioDestroy();
+    
     return 0;
 }
