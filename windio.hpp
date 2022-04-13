@@ -43,7 +43,6 @@
 // TODO(#1): Different instruments, drum like etc.
 // TODO(#2): Have a way to distinguish frequencies (better polyphony)
 // TODO(#3): ADSR, more pleasant sounds
-// TODO(#4): Explicit way of stopping music thread
 // TODO(#5): Multiple frequencies are NOT calculated correctly 
 
 enum Wave {
