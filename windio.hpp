@@ -41,7 +41,7 @@
 #endif
 
 // TODO(#1): Different instruments, drum like etc.
-// TODO: Have a way to distinguish frequencies (better polyphony)
+// TODO(#2): Have a way to distinguish frequencies (better polyphony)
 // TODO: ADSR, more pleasant sounds
 // TODO: Explicit way of stopping music thread
 // TODO: Multiple frequencies are NOT calculated correctly 
