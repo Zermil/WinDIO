@@ -40,7 +40,7 @@
 #define WINDIO_TIME_STEP (1.0f / WINDIO_SAMPLE_RATE)
 #endif
 
-// TODO: Different instruments, drum like etc.
+// TODO(#1): Different instruments, drum like etc.
 // TODO: Have a way to distinguish frequencies (better polyphony)
 // TODO: ADSR, more pleasant sounds
 // TODO: Explicit way of stopping music thread
