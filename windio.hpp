@@ -16,13 +16,12 @@
 #include <Windows.h>
 #include <mmsystem.h>
 
-// TODO(Aiden): Different sounds, piano like, drum like etc.
-// TODO(Aiden): Have a way to distinguish frequencies (better polyphony).
-// TODO(Aiden): ADSR, more pleasant sounds.
-// TODO(Aiden): Ensure that chords sound fine.
-
 #ifndef WINDIO_PI
-#define WINDIO_PI 3.141592653
+#define WINDIO_PI 3.141592653589
+#endif
+
+#ifndef WINDIO_DEF_VOLUME
+#define WINDIO_DEF_VOLUME 0.1
 #endif
 
 #ifndef WINDIO_BLOCKS_SZ
@@ -41,130 +40,76 @@
 #define WINDIO_TIME_STEP (1.0f / WINDIO_SAMPLE_RATE)
 #endif
 
-enum class Wave {
-    SIN = 0,
-    SQA,
-    TRI,
+// TODO: Different instruments, drum like etc.
+// TODO: Have a way to distinguish frequencies (better polyphony).
+// TODO: ADSR, more pleasant sounds.
+// TODO: Explicit way of stopping music thread.
+
+enum Wave {
+    WAVE_SIN = 0,
+    WAVE_SQU,
+    WAVE_TRI,
 };
 
-struct output_settings {
-    output_settings();
-    ~output_settings();
-
-    inline double fav(const double& f) const noexcept { return f * 2.0 * WINDIO_PI; } // Frequency as angular velocity
-    double get_sound_frequency();
-    void windioPlay(double frequency, Wave wave, double volume);
-    void windioPlayMultiple(const std::vector<double>& frequencies, Wave wave, double volume);
-    void windioStop();
-    void windioGetDevsInfo();
-
+struct windio_settings
+{
+    // NOTE(Aiden): Controlled by user
     std::atomic<double> frequency;
-    std::atomic<double> volume;
     std::atomic<Wave> wave;
+    std::atomic<double> volume;
 
-    // If you _really_ know what you're doing, you can modify anything below, otherwise, leave them alone.
-    // We are all consenting adults :)
-    void windioPlayThread();
-    static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2);
-    void error(const char* err_msg);
-    WAVEFORMATEX initialize_wave_struct();
-    
-    HWAVEOUT device;
-    WAVEHDR* wave_hdr;
-    short* block;
-    std::atomic<DWORD> free_blocks;
+    // NOTE(Aiden): Implementation part
+    std::atomic<bool> music_play = false;
     std::atomic<double> global_time;
-    std::atomic<bool> play_music;
-    std::thread music_thread;
+    std::atomic<DWORD> free_blocks;
+    std::condition_variable loop_again;
     std::mutex mux_play;
-    std::condition_variable loop_again;    
+    std::thread music_thread;
+
+    HWAVEOUT device;
+    WAVEHDR *wave_hdr;
+    short *block;
 };
+
+void windioPrintDevsInfo();
+void windioInitializeSettings(windio_settings& settings);
+void windioUninitializeSettings(windio_settings& settings);
+void windioPlay(windio_settings& settings, double frequency, Wave wave, double volume);
+void windioPlay(windio_settings& settings, double frequency, Wave wave);
+void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave, double volume);
+void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave);
+void windioMute(windio_settings& settings);
 
 #endif // WINDIO_HPP
-
 #ifdef WINDIO_IMPLEMENTATION
 
-void CALLBACK output_settings::waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
+// NOTE(Aiden): Frequency as angular velocity
+static inline double windioFav(const double& f)
 {
-    (void) hwo;
-    (void) dwParam1;
-    (void) dwParam2;
-
-    output_settings *settings = reinterpret_cast<output_settings*>(dwInstance);
-    
-    if (uMsg == WOM_DONE) {
-	settings->free_blocks++;
-	
-	std::lock_guard<std::mutex> lm(settings->mux_play);
-	settings->loop_again.notify_one();
-    }
+    return f * 2.0 * WINDIO_PI;
 }
 
-output_settings::output_settings()
+static double windioGetSoundFrequency(const windio_settings& settings)
 {
-    UINT devices = waveOutGetNumDevs();
-    
-    if (devices == 0) {
-	error("ERROR: No output devices were found!\n");
-    }
-    
-    WAVEFORMATEX wave_bin_hdr = initialize_wave_struct();
-    MMRESULT open_result = waveOutOpen(&device, 0, &wave_bin_hdr, reinterpret_cast<DWORD_PTR>(&output_settings::waveOutProc), reinterpret_cast<DWORD_PTR>(this), CALLBACK_FUNCTION);
-
-    if (open_result != MMSYSERR_NOERROR) {
-	error("ERROR: Default audio output device could not be properly opened!\n");
-    }
-
-    wave_hdr = new WAVEHDR[WINDIO_BLOCKS_SZ];
-
-    if (wave_hdr == nullptr) {
-	error("ERROR: Could not allocate enough memory for WAVEHDR\n");
+    switch (settings.wave) {
+        case WAVE_SIN:
+            return sin(windioFav(settings.frequency) * settings.global_time);
+            
+        case WAVE_SQU:
+            return sin(windioFav(settings.frequency) * settings.global_time) > 0.0 ? 1.0 : -1.0;
+            
+        case WAVE_TRI:
+            return asin(sin(windioFav(settings.frequency) * settings.global_time)) * (2.0 / WINDIO_PI);
+            
+        default:
+            assert(false && "[ERROR]: Unreachable, invalid wave provided!");
     }
 
-    block = new short[WINDIO_BLOCKS_SZ * WINDIO_SAMPLES_SZ];
-
-    if (block == nullptr) {
-	error("ERROR: Could not allocate enough memory for a block of samples\n");
-    }
-    
-    memset(wave_hdr, 0, sizeof(WAVEHDR) * WINDIO_BLOCKS_SZ);
-    memset(block, 0, sizeof(short) * WINDIO_BLOCKS_SZ * WINDIO_SAMPLES_SZ);
-
-    // wave_hdr will be pointing to data from block
-    for (DWORD i = 0; i < WINDIO_BLOCKS_SZ; ++i) {
-	wave_hdr[i].dwBufferLength = WINDIO_SAMPLES_SZ * sizeof(short);
-	wave_hdr[i].lpData = reinterpret_cast<LPSTR>(((block + (i * WINDIO_SAMPLES_SZ))));
-    }
-
-    // Start music output thread
-    global_time = 0.0;
-    free_blocks = WINDIO_BLOCKS_SZ;
-    frequency = 0.0;
-    volume = 0.2;
-    wave = Wave::SIN;
-    
-    play_music = true;
-    music_thread = std::thread(windioPlayThread, this);
+    // NOTE(Aiden): Realistically should never happen, but I don't trust computers
+    return 0.0;
 }
 
-output_settings::~output_settings()
-{
-    play_music = false;
-    music_thread.join();
-
-    if (block) {
-	delete[] block;
-    }
-
-    if (wave_hdr) {
-	delete[] wave_hdr;
-    }
-
-    waveOutReset(device);
-    waveOutClose(device);
-}
-
-WAVEFORMATEX output_settings::initialize_wave_struct()
+static WAVEFORMATEX windioInitializeWaveStruct()
 {
     WAVEFORMATEX wave_bin_hdr = {};
     
@@ -179,116 +124,157 @@ WAVEFORMATEX output_settings::initialize_wave_struct()
     return wave_bin_hdr;
 }
 
-void output_settings::error(const char* err_msg)
+static void CALLBACK waveOutProc(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2)
 {
-    fprintf(stderr, err_msg);
-    this->~output_settings();
+    (void) hwo;
+    (void) dwParam1;
+    (void) dwParam2;
+
+    windio_settings *settings = reinterpret_cast<windio_settings*>(dwInstance);
     
-    exit(1);
+    if (uMsg == WOM_DONE) {
+        std::lock_guard<std::mutex> lm(settings->mux_play);
+	
+        settings->free_blocks++;
+        settings->loop_again.notify_one();
+    }
 }
 
-void output_settings::windioGetDevsInfo()
+static void windioPlayThread(windio_settings& settings)
+{
+    size_t current_block = 0;
+    
+    while (settings.music_play) {
+        // NOTE(Aiden): Instead of 'continue;' it waits until it can loop again, not looping infinitely.
+        if (settings.free_blocks == 0) {
+            std::unique_lock<std::mutex> lm(settings.mux_play);
+            settings.loop_again.wait(lm, [&]() { return settings.free_blocks != 0; });
+        }
+	
+        settings.free_blocks--;
+    
+        if (settings.wave_hdr[current_block].dwFlags & WHDR_PREPARED) {
+            MMRESULT unprepare_result = waveOutUnprepareHeader(settings.device, &settings.wave_hdr[current_block], sizeof(WAVEHDR));
+            assert((unprepare_result == MMSYSERR_NOERROR) && "[ERROR]: Could not clear wave header\n");
+        }
+
+        for (DWORD i = 0; i < WINDIO_SAMPLES_SZ; ++i) {
+            short sample_freq = static_cast<short>((windioGetSoundFrequency(settings) * settings.volume) * SHRT_MAX);
+
+            settings.block[(current_block * WINDIO_SAMPLES_SZ) + i] = sample_freq;
+            settings.global_time = (settings.global_time + WINDIO_TIME_STEP);
+        }
+    
+        MMRESULT prepare_result = waveOutPrepareHeader(settings.device, &settings.wave_hdr[current_block], sizeof(WAVEHDR));
+        assert((prepare_result == MMSYSERR_NOERROR) && "[ERROR]: Could not prepare wave header\n");
+
+        MMRESULT write_result = waveOutWrite(settings.device, &settings.wave_hdr[current_block], sizeof(WAVEHDR));
+        assert((write_result == MMSYSERR_NOERROR) && "[ERROR]: Could not send audio to output device\n");
+
+        current_block = (current_block + 1) % WINDIO_BLOCKS_SZ;
+    }
+}
+
+void windioPrintDevsInfo()
 {
     WAVEOUTCAPS caps = {};
     UINT devices = waveOutGetNumDevs();
     
     printf("Devices Found:\n");
     for (UINT i = 0; i < devices; ++i) {
-	MMRESULT result = waveOutGetDevCaps(i, &caps, sizeof(WAVEOUTCAPS));
-
-	if (result != MMSYSERR_NOERROR) {
-	    error("ERROR: There was a problem retrieving information from one of the available devices!\n");
-	}
-	
-	printf("%s\n", caps.szPname);
+        MMRESULT result = waveOutGetDevCaps(i, &caps, sizeof(WAVEOUTCAPS));
+        assert((result == MMSYSERR_NOERROR) && "[ERROR]: There was a problem retrieving information from one of the available devices!\n\n");
+        
+        printf("%s\n", caps.szPname);
     }
 }
 
-void output_settings::windioPlay(double frequency, Wave wave = Wave::SIN, double volume = 0.2)
+void windioInitializeSettings(windio_settings& settings)
 {
-    this->volume = volume;
-    this->wave = wave;
-    this->frequency = frequency;
+    settings.frequency = 0.0;
+    settings.wave = WAVE_SIN;
+    settings.volume = WINDIO_DEF_VOLUME;
+    settings.global_time = 0.0;
+    settings.free_blocks = WINDIO_BLOCKS_SZ;
+
+    UINT devices = waveOutGetNumDevs();
+    assert((devices != 0) && "[ERROR]: No output devices were found\n");
+
+    WAVEFORMATEX wave_bin_hdr = windioInitializeWaveStruct();
+    
+    MMRESULT open_result = waveOutOpen(&settings.device, 0, &wave_bin_hdr, reinterpret_cast<DWORD_PTR>(waveOutProc), reinterpret_cast<DWORD_PTR>(&settings), CALLBACK_FUNCTION);
+    assert((open_result == MMSYSERR_NOERROR) && "[ERROR]: Default audio output device could not be properly opened!\n");
+
+    settings.wave_hdr = new WAVEHDR[WINDIO_BLOCKS_SZ];
+    settings.block = new short[WINDIO_BLOCKS_SZ * WINDIO_SAMPLES_SZ];
+     
+    assert((settings.wave_hdr != nullptr) && "[ERROR]: Could not allocate memory for wave header\n");
+    assert((settings.block != nullptr) && "[ERROR]: Could not allocate memory for audio block\n");
+
+    memset(settings.wave_hdr, 0, sizeof(WAVEHDR) * WINDIO_BLOCKS_SZ);
+    memset(settings.block, 0, sizeof(short) * WINDIO_BLOCKS_SZ * WINDIO_SAMPLES_SZ);
+
+    // NOTE(Aiden): wave_hdr will be pointing to data from block
+    for (DWORD i = 0; i < WINDIO_BLOCKS_SZ; ++i) {
+        settings.wave_hdr[i].dwBufferLength = WINDIO_SAMPLES_SZ * sizeof(short);
+        settings.wave_hdr[i].lpData = reinterpret_cast<LPSTR>(((settings.block + (i * WINDIO_SAMPLES_SZ))));
+    }
+
+    settings.music_play = true;
+    settings.music_thread = std::thread(windioPlayThread, std::ref(settings));
 }
 
-void output_settings::windioPlayMultiple(const std::vector<double>& frequencies, Wave wave = Wave::SIN, double volume = 0.2)
+void windioUninitializeSettings(windio_settings& settings)
 {
-    double frequency = 0.0;
+    assert((settings.music_play) && "[ERROR]: Trying to clear uninitialized instance of windio_settings\n");
+    
+    settings.music_play = false;
+    settings.music_thread.join();
 
+    delete[] settings.wave_hdr;
+    delete[] settings.block;
+    
+    waveOutReset(settings.device);
+    waveOutClose(settings.device);
+}
+
+void windioMute(windio_settings& settings)
+{
+    settings.frequency = 0.0;
+    settings.volume = 0.0;
+}
+
+void windioPlay(windio_settings& settings, double frequency, Wave wave)
+{
+    windioPlay(settings, frequency, wave, WINDIO_DEF_VOLUME);
+}
+
+void windioPlay(windio_settings& settings, double frequency, Wave wave, double volume)
+{
+    assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you call windioInitializeSetting(windio_settings& settings)?\n"); 
+
+    settings.frequency = frequency;
+    settings.wave = wave;
+    settings.volume = volume;
+}
+
+void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave)
+{
+    windioPlayMultiple(settings, frequencies, wave, WINDIO_DEF_VOLUME);
+}
+
+void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave, double volume)
+{
+    assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you call windioInitializeSetting(windio_settings& settings)?\n");
+    
+    double sum = 0.0;
     for (const double& freq : frequencies) {
-	frequency += freq;
+        sum += freq;
     }
-    
-    this->volume = volume;
-    this->wave = wave;
-    this->frequency = frequency;
-}
 
-void output_settings::windioStop()
-{
-    this->frequency = 0.0;
-}
-
-double output_settings::get_sound_frequency()
-{    
-    switch (wave) {
-	case Wave::SIN:
-	    return sin(fav(frequency) * global_time);
-	case Wave::SQA:
-	    return sin(fav(frequency) * global_time) > 0.0 ? 1.0 : -1.0;
-	case Wave::TRI:
-	    return asin(sin(fav(frequency) * global_time)) * (2.0 / WINDIO_PI);
-	default:
-	    assert(false && "Unreachable, invalid wave provided!");
-    }
-    
-    // Realistically this should never happened, but I still don't trust computers.
-    return 0.0;
-}
-
-void output_settings::windioPlayThread()
-{
-    size_t current_block = 0;
-    
-    while (play_music) {
-	// Instead of 'continue;' it waits until it can loop again,
-	// not looping infinitely.
-	if (free_blocks == 0) {
-	    std::unique_lock<std::mutex> lm(mux_play);
-	    loop_again.wait(lm, [&]() { return free_blocks != 0; });
-	}
-	
-	free_blocks--;
-    
-	if (wave_hdr[current_block].dwFlags & WHDR_PREPARED) {
-	    MMRESULT unprepare_result = waveOutUnprepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
-	
-	    if (unprepare_result != MMSYSERR_NOERROR) {
-		error("ERROR: Could not clear wave header\n");
-	    }
-	}
-
-	for (DWORD i = 0; i < WINDIO_SAMPLES_SZ; ++i) {
-	    short sample_freq = static_cast<short>((get_sound_frequency() * volume) * SHRT_MAX);
-
-	    block[(current_block * WINDIO_SAMPLES_SZ) + i] = sample_freq;
-	    global_time = (global_time + WINDIO_TIME_STEP);
-	}
-    
-	MMRESULT prepare_result = waveOutPrepareHeader(device, &wave_hdr[current_block], sizeof(WAVEHDR));
-
-	if (prepare_result != MMSYSERR_NOERROR) {
-	    error("ERROR: Could not prepare wave header\n");
-	}
-
-	MMRESULT write_result = waveOutWrite(device, &wave_hdr[current_block], sizeof(WAVEHDR));
-    
-	if (write_result != MMSYSERR_NOERROR) {
-	    error("ERROR: Could not send audio to output device\n");
-	}
-
-	current_block = (current_block + 1) % WINDIO_BLOCKS_SZ;
-    }
+    settings.frequency = sum;
+    settings.wave = wave;
+    settings.volume = volume;
 }
 
 #endif // WINDIO_IMPLEMENTATION

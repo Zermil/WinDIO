@@ -3,8 +3,9 @@
 #define WINDIO_IMPLEMENTATION
 #include "./windio.hpp"
 
-// For compilers that implement it
+// For compilers that implement it (MSVC and similar)
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "user32.lib")
 
 enum Key : uint8_t {
     KEY_A = 0x41,
@@ -12,38 +13,57 @@ enum Key : uint8_t {
     KEY_S = 0x53,
 };
 
+enum KeyState : uint16_t {
+    PRESSED = 0x01,
+    HELD = 0x8000,
+};
+
 int main()
 {
-    output_settings settings;
-    settings.windioGetDevsInfo();
-
+    bool running = true;
+    windio_settings settings = {};
     std::vector<double> frequencies = {
-	261.63,
-	329.63,
-	392.00,
-	493.88
+        261.63,
+        329.63,
+        392.00,
+        493.88
     };
     
-    bool running = true;
+    windioInitializeSettings(settings);
+    windioPrintDevsInfo(); // Helper function, show available audio devices
+    
     while (running) {
-	if (GetAsyncKeyState(KEY_A) & 0x01) {
-	    settings.windioPlay(440.0);
-	}
+        bool key_pressed = false;
+        
+        if (GetAsyncKeyState(KEY_A) & HELD) {
+            windioPlay(settings, 440.0, WAVE_SIN);
+            
+            key_pressed = true;
+        }
 	
-	if (GetAsyncKeyState(KEY_S) & 0x01) {
-	    settings.wave = Wave::TRI;
-	    settings.frequency = 261.63;
-	}
+        if (GetAsyncKeyState(KEY_S) & HELD) {
+            windioPlay(settings, 261.63, WAVE_TRI, 0.4);
+            
+            key_pressed = true;
+        }
 
-	if (GetAsyncKeyState(KEY_D) & 0x01) {
-	    settings.windioPlayMultiple(frequencies);
-	}
+        if (GetAsyncKeyState(KEY_D) & HELD) {
+            windioPlayMultiple(settings, frequencies, WAVE_SIN);
+            
+            key_pressed = true;
+        }
 	
-	if (GetAsyncKeyState(VK_ESCAPE) & 0x01) {
-	    settings.frequency = 0.0;
-	    running = false;
-	}
+        if (GetAsyncKeyState(VK_ESCAPE) & PRESSED) {
+            windioMute(settings);
+            running = false;
+        }
+
+        if (!key_pressed) {
+            windioMute(settings);
+        }
     }
+
+    windioUninitializeSettings(settings);
     
     return 0;
 }
