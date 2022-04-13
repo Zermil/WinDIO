@@ -42,7 +42,7 @@
 
 // TODO(#1): Different instruments, drum like etc.
 // TODO(#2): Have a way to distinguish frequencies (better polyphony)
-// TODO: ADSR, more pleasant sounds
+// TODO(#3): ADSR, more pleasant sounds
 // TODO: Explicit way of stopping music thread
 // TODO: Multiple frequencies are NOT calculated correctly 
 
