@@ -22,7 +22,7 @@ int main()
 {
     bool running = true;
     windio_settings settings = {};
-    std::vector<double> frequencies = {
+    std::vector<float> frequencies = {
         261.63,
         329.63,
         392.00,

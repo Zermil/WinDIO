@@ -21,7 +21,7 @@
 #endif
 
 #ifndef WINDIO_DEF_VOLUME
-#define WINDIO_DEF_VOLUME 0.1
+#define WINDIO_DEF_VOLUME 0.1f
 #endif
 
 #ifndef WINDIO_BLOCKS_SZ
@@ -54,13 +54,13 @@ enum Wave {
 struct windio_settings
 {
     // NOTE(Aiden): Controlled by user
-    std::atomic<double> frequency;
+    std::atomic<float> frequency;
     std::atomic<Wave> wave;
-    std::atomic<double> volume;
+    std::atomic<float> volume;
 
     // NOTE(Aiden): Implementation part
     std::atomic<bool> music_play = false;
-    std::atomic<double> global_time;
+    std::atomic<float> global_time;
     std::atomic<DWORD> free_blocks;
     std::condition_variable loop_again;
     std::mutex mux_play;
@@ -74,22 +74,22 @@ struct windio_settings
 void windioPrintDevsInfo();
 void windioInitializeSettings(windio_settings& settings);
 void windioUninitializeSettings(windio_settings& settings);
-void windioPlay(windio_settings& settings, double frequency, Wave wave, double volume);
-void windioPlay(windio_settings& settings, double frequency, Wave wave);
-void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave, double volume);
-void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave);
+void windioPlay(windio_settings& settings, float frequency, Wave wave, float volume);
+void windioPlay(windio_settings& settings, float frequency, Wave wave);
+void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave, float volume);
+void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave);
 void windioMute(windio_settings& settings);
 
 #endif // WINDIO_HPP
 #ifdef WINDIO_IMPLEMENTATION
 
 // NOTE(Aiden): Frequency as angular velocity
-static inline double windioFav(const double& f)
+static inline float windioFav(const float& f)
 {
     return f * 2.0 * WINDIO_PI;
 }
 
-static double windioGetSoundFrequency(const windio_settings& settings)
+static float windioGetSoundFrequency(const windio_settings& settings)
 {
     switch (settings.wave) {
         case WAVE_SIN:
@@ -244,12 +244,12 @@ void windioMute(windio_settings& settings)
     settings.volume = 0.0;
 }
 
-void windioPlay(windio_settings& settings, double frequency, Wave wave)
+void windioPlay(windio_settings& settings, float frequency, Wave wave)
 {
     windioPlay(settings, frequency, wave, WINDIO_DEF_VOLUME);
 }
 
-void windioPlay(windio_settings& settings, double frequency, Wave wave, double volume)
+void windioPlay(windio_settings& settings, float frequency, Wave wave, float volume)
 {
     assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you call windioInitializeSetting(windio_settings& settings)?\n"); 
 
@@ -258,17 +258,17 @@ void windioPlay(windio_settings& settings, double frequency, Wave wave, double v
     settings.volume = volume;
 }
 
-void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave)
+void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave)
 {
     windioPlayMultiple(settings, frequencies, wave, WINDIO_DEF_VOLUME);
 }
 
-void windioPlayMultiple(windio_settings& settings, const std::vector<double>& frequencies, Wave wave, double volume)
+void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave, float volume)
 {
     assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you call windioInitializeSetting(windio_settings& settings)?\n");
     
-    double sum = 0.0;
-    for (const double& freq : frequencies) {
+    float sum = 0.0;
+    for (const float& freq : frequencies) {
         sum += freq;
     }
 
