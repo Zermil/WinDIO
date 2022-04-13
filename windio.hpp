@@ -41,9 +41,10 @@
 #endif
 
 // TODO: Different instruments, drum like etc.
-// TODO: Have a way to distinguish frequencies (better polyphony).
-// TODO: ADSR, more pleasant sounds.
-// TODO: Explicit way of stopping music thread.
+// TODO: Have a way to distinguish frequencies (better polyphony)
+// TODO: ADSR, more pleasant sounds
+// TODO: Explicit way of stopping music thread
+// TODO: Multiple frequencies are NOT calculated correctly 
 
 enum Wave {
     WAVE_SIN = 0,
