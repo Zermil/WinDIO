@@ -72,7 +72,7 @@ struct windio_settings
 };
 
 void windioPrintDevsInfo();
-void windioInitializeSettings(windio_settings& settings);
+void windioInitializeSettings(windio_settings& settings, UINT device_num = 0);
 void windioUninitializeSettings(windio_settings& settings);
 void windioPlay(windio_settings& settings, float frequency, Wave wave, float volume);
 void windioPlay(windio_settings& settings, float frequency, Wave wave);
@@ -189,7 +189,7 @@ void windioPrintDevsInfo()
     }
 }
 
-void windioInitializeSettings(windio_settings& settings)
+void windioInitializeSettings(windio_settings& settings, UINT device_num)
 {
     settings.frequency = 0.0;
     settings.wave = WAVE_SIN;
@@ -202,7 +202,7 @@ void windioInitializeSettings(windio_settings& settings)
 
     WAVEFORMATEX wave_bin_hdr = windioInitializeWaveStruct();
     
-    MMRESULT open_result = waveOutOpen(&settings.device, 0, &wave_bin_hdr, reinterpret_cast<DWORD_PTR>(waveOutProc), reinterpret_cast<DWORD_PTR>(&settings), CALLBACK_FUNCTION);
+    MMRESULT open_result = waveOutOpen(&settings.device, device_num, &wave_bin_hdr, reinterpret_cast<DWORD_PTR>(waveOutProc), reinterpret_cast<DWORD_PTR>(&settings), CALLBACK_FUNCTION);
     assert((open_result == MMSYSERR_NOERROR) && "[ERROR]: Default audio output device could not be properly opened!\n");
 
     settings.wave_hdr = new WAVEHDR[WINDIO_BLOCKS_SZ];
