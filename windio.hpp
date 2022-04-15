@@ -47,7 +47,7 @@
 // TODO(#1): Different instruments, drum like etc.
 // TODO(#2): Have a way to distinguish frequencies (better polyphony)
 // TODO(#3): ADSR, more pleasant sounds
-// TODO: Better way of checking if a struct passed through windioInitializeSetting()
+// TODO(#6): Better way of checking if a struct passed through windioInitializeSetting()
 
 enum Wave {
     WAVE_SIN = 0,
