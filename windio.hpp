@@ -36,6 +36,10 @@
 #define WINDIO_SAMPLE_RATE 44100
 #endif
 
+#ifndef WINDIO_FREQ_CAP
+#define WINDIO_FREQ_CAP 32
+#endif
+
 #ifndef WINDIO_TIME_STEP
 #define WINDIO_TIME_STEP (1.0f / WINDIO_SAMPLE_RATE)
 #endif
@@ -43,7 +47,7 @@
 // TODO(#1): Different instruments, drum like etc.
 // TODO(#2): Have a way to distinguish frequencies (better polyphony)
 // TODO(#3): ADSR, more pleasant sounds
-// TODO(#5): Multiple frequencies are NOT calculated correctly 
+// TODO: Better way of checking if a struct passed through windioInitializeSetting()
 
 enum Wave {
     WAVE_SIN = 0,
@@ -54,18 +58,19 @@ enum Wave {
 struct windio_settings
 {
     // NOTE(Aiden): Controlled by user
-    std::atomic<float> frequency;
+    std::atomic<float> frequency[WINDIO_FREQ_CAP];
     std::atomic<Wave> wave;
     std::atomic<float> volume;
 
     // NOTE(Aiden): Implementation part
     std::atomic<bool> music_play = false;
-    std::atomic<float> global_time;
+    std::atomic<double> global_time;
     std::atomic<DWORD> free_blocks;
+    std::atomic<size_t> samples_sz;
     std::condition_variable loop_again;
     std::mutex mux_play;
     std::thread music_thread;
-
+    
     HWAVEOUT device;
     WAVEHDR *wave_hdr;
     short *block;
@@ -76,6 +81,7 @@ void windioInitializeSettings(windio_settings& settings, UINT device_num = 0);
 void windioUninitializeSettings(windio_settings& settings);
 void windioPlay(windio_settings& settings, float frequency, Wave wave, float volume);
 void windioPlay(windio_settings& settings, float frequency, Wave wave);
+void windioPlayMultiple(windio_settings& settings, const float *frequencies, size_t samples, Wave wave, float volume);
 void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave, float volume);
 void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave);
 void windioMute(windio_settings& settings);
@@ -91,22 +97,28 @@ static inline float windioFav(const float& f)
 
 static float windioGetSoundFrequency(const windio_settings& settings)
 {
-    switch (settings.wave) {
-        case WAVE_SIN:
-            return sin(windioFav(settings.frequency) * settings.global_time);
+    float out = 0.0f;
+    
+    for (size_t i = 0; i < settings.samples_sz; ++i) {
+        switch (settings.wave) {
+            case WAVE_SIN:
+                out += sin(windioFav(settings.frequency[i]) * settings.global_time);
+                break;
             
-        case WAVE_SQU:
-            return sin(windioFav(settings.frequency) * settings.global_time) > 0.0 ? 1.0 : -1.0;
+            case WAVE_SQU:
+                out += sin(windioFav(settings.frequency[i]) * settings.global_time) > 0.0 ? 1.0 : -1.0;
+                break;
             
-        case WAVE_TRI:
-            return asin(sin(windioFav(settings.frequency) * settings.global_time)) * (2.0 / WINDIO_PI);
+            case WAVE_TRI:
+                out += asin(sin(windioFav(settings.frequency[i]) * settings.global_time)) * (2.0 / WINDIO_PI);
+                break;
             
-        default:
-            assert(false && "[ERROR]: Unreachable, invalid wave provided!");
+            default:
+                assert(false && "[ERROR]: Unreachable, invalid wave provided!");
+        }
     }
 
-    // NOTE(Aiden): Realistically should never happen, but I don't trust computers
-    return 0.0;
+    return out;
 }
 
 static WAVEFORMATEX windioInitializeWaveStruct()
@@ -191,7 +203,8 @@ void windioPrintDevsInfo()
 
 void windioInitializeSettings(windio_settings& settings, UINT device_num)
 {
-    settings.frequency = 0.0;
+    settings.frequency[0] = 0.0f;
+    settings.samples_sz = 1;
     settings.wave = WAVE_SIN;
     settings.volume = WINDIO_DEF_VOLUME;
     settings.global_time = 0.0;
@@ -202,7 +215,9 @@ void windioInitializeSettings(windio_settings& settings, UINT device_num)
 
     WAVEFORMATEX wave_bin_hdr = windioInitializeWaveStruct();
     
-    MMRESULT open_result = waveOutOpen(&settings.device, device_num, &wave_bin_hdr, reinterpret_cast<DWORD_PTR>(waveOutProc), reinterpret_cast<DWORD_PTR>(&settings), CALLBACK_FUNCTION);
+    MMRESULT open_result = waveOutOpen(&settings.device, device_num, &wave_bin_hdr,
+                                       reinterpret_cast<DWORD_PTR>(waveOutProc),
+                                       reinterpret_cast<DWORD_PTR>(&settings), CALLBACK_FUNCTION);
     assert((open_result == MMSYSERR_NOERROR) && "[ERROR]: Default audio output device could not be properly opened!\n");
 
     settings.wave_hdr = new WAVEHDR[WINDIO_BLOCKS_SZ];
@@ -240,8 +255,9 @@ void windioUninitializeSettings(windio_settings& settings)
 
 void windioMute(windio_settings& settings)
 {
-    settings.frequency = 0.0;
-    settings.volume = 0.0;
+    settings.frequency[0] = 0.0f;
+    settings.samples_sz = 1;
+    settings.volume = 0.0f;
 }
 
 void windioPlay(windio_settings& settings, float frequency, Wave wave)
@@ -251,28 +267,34 @@ void windioPlay(windio_settings& settings, float frequency, Wave wave)
 
 void windioPlay(windio_settings& settings, float frequency, Wave wave, float volume)
 {
-    assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you call windioInitializeSetting(windio_settings& settings)?\n"); 
+    assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you forget to call windioInitializeSetting(windio_settings& settings)?\n"); 
 
-    settings.frequency = frequency;
+    settings.frequency[0] = frequency;
+    settings.samples_sz = 1;
     settings.wave = wave;
     settings.volume = volume;
 }
 
 void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave)
 {
-    windioPlayMultiple(settings, frequencies, wave, WINDIO_DEF_VOLUME);
+    windioPlayMultiple(settings, frequencies.data(), frequencies.size(), wave, WINDIO_DEF_VOLUME);
 }
 
 void windioPlayMultiple(windio_settings& settings, const std::vector<float>& frequencies, Wave wave, float volume)
 {
-    assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you call windioInitializeSetting(windio_settings& settings)?\n");
-    
-    float sum = 0.0;
-    for (const float& freq : frequencies) {
-        sum += freq;
-    }
+    windioPlayMultiple(settings, frequencies.data(), frequencies.size(), wave, volume);
+}
 
-    settings.frequency = sum;
+void windioPlayMultiple(windio_settings& settings, const float *frequencies, size_t samples, Wave wave, float volume)
+{
+    assert((settings.music_play) && "[ERROR]: windio_settings not initialized, did you forget to call windioInitializeSetting(windio_settings& settings)?\n");
+    assert((samples <= WINDIO_FREQ_CAP) && "[ERROR]: Trying to assign more samples than current max capacity\n");
+
+    for (size_t i = 0; i < samples; ++i) {
+        settings.frequency[i] = frequencies[i];
+    }
+    
+    settings.samples_sz = samples;
     settings.wave = wave;
     settings.volume = volume;
 }
