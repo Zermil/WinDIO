@@ -47,7 +47,9 @@
 // TODO(#1): Different instruments, drum like etc.
 // TODO(#2): Have a way to distinguish frequencies (better polyphony)
 // TODO(#3): ADSR, more pleasant sounds
-// TODO(#6): Better way of checking if a struct passed through windioInitializeSetting()
+
+// TODO(#7): Function pointers in array for different waves
+//   could eliminate branching in windioGetSoundFrequency()
 
 enum Wave {
     WAVE_SIN = 0,
@@ -63,10 +65,11 @@ struct windio_settings
     std::atomic<float> volume;
 
     // NOTE(Aiden): Implementation part
-    std::atomic<bool> music_play = false;
+    std::atomic<bool> music_play;
     std::atomic<double> global_time;
     std::atomic<DWORD> free_blocks;
     std::atomic<size_t> samples_sz;
+    
     std::condition_variable loop_again;
     std::mutex mux_play;
     std::thread music_thread;
@@ -74,6 +77,9 @@ struct windio_settings
     HWAVEOUT device;
     WAVEHDR *wave_hdr;
     short *block;
+
+    // TODO(#6): Better way of checking if a struct passed through windioInitializeSetting()
+    windio_settings() : music_play(false) {}
 };
 
 void windioPrintDevsInfo();
