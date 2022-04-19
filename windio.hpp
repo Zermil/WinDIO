@@ -48,9 +48,6 @@
 // TODO(#2): Have a way to distinguish frequencies (better polyphony)
 // TODO(#3): ADSR, more pleasant sounds
 
-// TODO(#7): Function pointers in array for different waves
-//   could eliminate branching in windioGetSoundFrequency()
-
 enum Wave {
     WAVE_SIN = 0,
     WAVE_SQU,
