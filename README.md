@@ -22,3 +22,9 @@ Remember to link against 'winmm' and 'pthreads'
 ```console
 > build
 ```
+
+You can also use MSVC build batch file
+
+```console
+> msvc
+```
